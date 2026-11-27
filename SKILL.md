@@ -38,7 +38,7 @@ this skill's `scripts/` folder.
 Copy this directory into the coding agent's skill-discovery path:
 
 ```bash
-cp -R <evalscope-repo>/skills/evalscope-evalgen ~/.claude/skills/
+git clone https://github.com/frostloom/evalgen-skill.git ~/.claude/skills/evalscope-evalgen
 ```
 
 For Claude Code that path is usually `~/.claude/skills/evalscope-evalgen/`;

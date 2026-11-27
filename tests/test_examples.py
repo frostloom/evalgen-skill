@@ -18,17 +18,22 @@ class MinimalExampleTest(unittest.TestCase):
     """
 
     def test_example_validates_strictly(self):
-        result = subprocess.run(
-            [
-                sys.executable, str(SCRIPT),
-                '--eval-set', str(EXAMPLE / 'eval_set.v1.jsonl'),
-                '--scan', str(EXAMPLE / 'scan.json'),
-                '--plan', str(EXAMPLE / 'eval_plan.json'),
-                '--root', str(EXAMPLE / 'project'),
-                '--strict',
-            ],
-            capture_output=True, text=True,
-        )
+        task = json.loads((EXAMPLE / 'eval_set.v1.jsonl').read_text(encoding='utf-8').splitlines()[0])
+        task['metadata']['env_assumptions']['state_dir'] = str(EXAMPLE / 'project')
+        with tempfile.TemporaryDirectory() as tmp:
+            eval_set = Path(tmp) / 'eval_set.v1.jsonl'
+            eval_set.write_text(json.dumps(task, ensure_ascii=False) + '\n', encoding='utf-8')
+            result = subprocess.run(
+                [
+                    sys.executable, str(SCRIPT),
+                    '--eval-set', str(eval_set),
+                    '--scan', str(EXAMPLE / 'scan.json'),
+                    '--plan', str(EXAMPLE / 'eval_plan.json'),
+                    '--root', str(EXAMPLE / 'project'),
+                    '--strict',
+                ],
+                capture_output=True, text=True,
+            )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('OK: 1 task(s)', result.stdout)
 

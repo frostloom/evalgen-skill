@@ -11,7 +11,7 @@ and use read-only state checks (SQLite or a status API) for the final outcome.
 Copy this folder into your coding agent's skill-discovery path. For Claude Code:
 
 ```bash
-cp -R skills/evalscope-evalgen ~/.claude/skills/
+git clone https://github.com/frostloom/evalgen-skill.git ~/.claude/skills/evalscope-evalgen
 ```
 
 Other agents use their own skill path. The skill only needs Python 3.11+ and
