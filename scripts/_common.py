@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+import posixpath
 import socket
+from collections.abc import Iterable
 from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from urllib.request import Request, urlopen
 
 HTTP_PREFIXES = ('http://127.0.0.1', 'http://localhost')
@@ -37,27 +39,74 @@ def auth_hint(status: int | None, env_var: str = '') -> str:
     )
 
 
-def is_allowed_http(url: object) -> bool:
-    """Accept only plain http://127.0.0.1[:port] or http://localhost[:port].
-
-    The prefix match alone is not enough: ``http://localhost:80@evil.com/x``
-    starts with the loopback prefix but connects to ``evil.com``. Parse the URL
-    and require an exact loopback host with no userinfo.
-    """
+def is_http_url(url: object) -> bool:
+    """Accept an http(s) URL with a host, no userinfo and a valid port."""
     if not isinstance(url, str) or not url:
-        return False
-    if not any(url.startswith(prefix) for prefix in HTTP_PREFIXES):
         return False
     try:
         parsed = urlsplit(url)
         port = parsed.port
     except ValueError:
         return False
-    if parsed.scheme != 'http' or parsed.hostname not in {'127.0.0.1', 'localhost'}:
+    if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
         return False
     if parsed.username is not None or parsed.password is not None:
         return False
     return port is None or 1 <= port <= 65535
+
+
+def _prefix_allows(url: str, prefix: str) -> bool:
+    """Match a trusted remote prefix by scheme, host, effective port and path."""
+    try:
+        target = urlsplit(url)
+        allowed = urlsplit(prefix)
+        target_port = target.port
+        allowed_port = allowed.port
+    except ValueError:
+        return False
+    if target.scheme not in {'http', 'https'} or allowed.scheme not in {'http', 'https'}:
+        return False
+    if not target.hostname or not allowed.hostname:
+        return False
+    if target.username is not None or target.password is not None:
+        return False
+    if allowed.username is not None or allowed.password is not None:
+        return False
+    if target.scheme != allowed.scheme or target.hostname.lower() != allowed.hostname.lower():
+        return False
+    effective_target = target_port if target_port is not None else (443 if target.scheme == 'https' else 80)
+    if allowed_port is not None and effective_target != allowed_port:
+        return False
+    target_path = posixpath.normpath(unquote(target.path or '/'))
+    allowed_path = posixpath.normpath(unquote(allowed.path or '/'))
+    if allowed_path == '/':
+        return True
+    return target_path == allowed_path or target_path.startswith(allowed_path.rstrip('/') + '/')
+
+
+def is_allowed_http(url: object, prefixes: Iterable[str] = ()) -> bool:
+    """Accept loopback HTTP by default, or an explicitly trusted remote prefix.
+
+    The prefix match alone is not enough: ``http://localhost:80@evil.com/x``
+    starts with the loopback prefix but connects to ``evil.com``. Parse every
+    URL and require an exact host with no userinfo. Remote prefixes are explicit
+    opt-in, matching EvalScope's ``check_url_prefixes`` contract.
+    """
+    if not isinstance(url, str) or not url:
+        return False
+    # Keep the skill's explicit lowercase-scheme contract; parsed schemes are lowercased.
+    if not url.startswith(('http://', 'https://')):
+        return False
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    if parsed.scheme == 'http' and parsed.hostname in {'127.0.0.1', 'localhost'}:
+        if parsed.username is not None or parsed.password is not None:
+            return False
+        return port is None or 1 <= port <= 65535
+    return any(_prefix_allows(url, prefix) for prefix in prefixes)
 
 
 def is_relative_path(value: object) -> bool:
@@ -170,6 +219,7 @@ __all__ = [
     'assert_under_root',
     'auth_hint',
     'is_allowed_http',
+    'is_http_url',
     'is_relative_path',
     'is_sensitive_path',
     'probe_agent',

@@ -10,15 +10,15 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import urlsplit
 
-from _common import is_allowed_http, is_relative_path, is_sensitive_path
+from _common import is_allowed_http, is_http_url, is_relative_path, is_sensitive_path
 
 CHECK_TYPES = {'file_exists', 'file_content', 'http', 'http_json', 'sqlite', 'json_path'}
 EVIDENCE = {'answer', 'outcome', 'process'}
 EXEC_TYPES = {'agent_api', 'http'}
-PROTOCOLS = {'rest_steps', 'otel', 'openai_compat'}
+PROTOCOLS = {'rest_steps', 'openai_compat'}
 DIFFICULTIES = {'easy', 'medium', 'hard'}
 ORIGINS = {'fact', 'inference'}
 TRACE_MODES = {'auto', 'inline', 'fetch', 'none'}
@@ -65,7 +65,7 @@ EXEC_FIELDS = {
     'trace',
     'session',
 }
-TRACE_FIELDS = {'mode', 'endpoint', 'header'}
+TRACE_FIELDS = {'mode'}
 MATERIAL_FIELDS = {'path', 'sha256'}
 
 IDENTIFIER_RE = re.compile(r'^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$')
@@ -465,7 +465,13 @@ def _lint_check_sql(check: dict, where: str, errors: list[str], scan_text: str |
                 errors.append(f'{where}: check {cid} asserts tool {tool!r}, which is not in the scanned sources')
 
 
-def _lint_env_assumptions(task: dict, where: str, errors: list[str], warnings: list[str]) -> None:
+def _lint_env_assumptions(
+    task: dict,
+    where: str,
+    errors: list[str],
+    warnings: list[str],
+    check_url_prefixes: Iterable[str] = (),
+) -> None:
     metadata = task.get('metadata')
     if not isinstance(metadata, dict):
         return
@@ -481,14 +487,20 @@ def _lint_env_assumptions(task: dict, where: str, errors: list[str], warnings: l
     agent_url = env.get('agent_url')
     if not isinstance(agent_url, str) or not agent_url.strip():
         errors.append(f'{where}: metadata.env_assumptions.agent_url is required')
-    elif not is_allowed_http(agent_url):
-        errors.append(
-            f'{where}: metadata.env_assumptions.agent_url must use http://127.0.0.1 or '
-            f'http://localhost, got {agent_url!r}'
-        )
+    elif not is_http_url(agent_url):
+        errors.append(f'{where}: metadata.env_assumptions.agent_url must be an http(s) URL, got {agent_url!r}')
+    checks = task.get('checks') if isinstance(task.get('checks'), list) else []
+    local_check_types = {'file_exists', 'file_content', 'json_path', 'sqlite'}
+    needs_state_dir = any(
+        isinstance(check, dict)
+        and isinstance(check.get('type'), str)
+        and check['type'] in local_check_types
+        for check in checks
+    )
     state_dir = env.get('state_dir')
     if not isinstance(state_dir, str) or not state_dir.strip():
-        errors.append(f'{where}: metadata.env_assumptions.state_dir is required')
+        if needs_state_dir:
+            errors.append(f'{where}: metadata.env_assumptions.state_dir is required for local checks')
     elif not os.path.isabs(state_dir):
         errors.append(
             f'{where}: metadata.env_assumptions.state_dir must be an absolute path, got {state_dir!r}'
@@ -499,7 +511,7 @@ def _lint_env_assumptions(task: dict, where: str, errors: list[str], warnings: l
             f'{state_dir!r}; create it or point at the directory the service was started with '
             '--state-root'
         )
-    if isinstance(reset_url, str) and reset_url and isinstance(agent_url, str) and is_allowed_http(agent_url):
+    if isinstance(reset_url, str) and reset_url and isinstance(agent_url, str) and is_http_url(agent_url):
         agent_parts = urlsplit(agent_url)
         reset_parts = urlsplit(reset_url)
         if (agent_parts.hostname, agent_parts.port) != (reset_parts.hostname, reset_parts.port):
@@ -518,6 +530,7 @@ def validate_task(
     errors: list[str],
     warnings: list[str],
     scan_text: str | None = None,
+    check_url_prefixes: Iterable[str] = (),
 ) -> None:
     where = f'line {index}'
     if not isinstance(task, dict):
@@ -695,8 +708,11 @@ def validate_task(
             url = check.get('url')
             if not isinstance(url, str) or not url:
                 errors.append(f'{where}: check {cid} requires url')
-            elif not is_allowed_http(url):
-                errors.append(f'{where}: check {cid} URL must use http://127.0.0.1 or http://localhost')
+            elif not is_allowed_http(url, check_url_prefixes):
+                errors.append(
+                    f'{where}: check {cid} URL must use loopback HTTP or an explicit '
+                    f'--check-url-prefix, got {url!r}'
+                )
             method = check.get('method')
             if 'method' in check and (not isinstance(method, str) or method not in METHODS):
                 errors.append(f'{where}: check {cid} has invalid method')
@@ -746,17 +762,12 @@ def validate_task(
             _unknown_fields(trace, TRACE_FIELDS, f'{where} trace', errors)
             mode = trace.get('mode', 'auto')
             if not isinstance(mode, str) or mode not in TRACE_MODES:
-                errors.append(f'{where}: exec.trace.mode must be auto/inline/fetch/none')
+                errors.append(f'{where}: exec.trace.mode must be auto/inline/none')
             elif mode == 'fetch':
                 errors.append(
                     f'{where}: exec.trace.mode=fetch is not implemented — this EvalScope build '
                     'records only steps returned inline with the reply. Use auto/inline, or accept '
                     'L0 and drop process criteria'
-                )
-            elif 'endpoint' in trace and mode != 'fetch':
-                warnings.append(
-                    f'{where}: exec.trace.endpoint has no effect unless mode=fetch, which is not '
-                    'implemented; the endpoint is ignored'
                 )
         session = exec_spec.get('session', {})
         if not isinstance(session, dict):
@@ -792,7 +803,7 @@ def validate_task(
     _lint_expected_facts(task, where, errors)
     _lint_answer_criteria(task, where, errors, warnings)
     _lint_messages(task, where, errors, warnings)
-    _lint_env_assumptions(task, where, errors, warnings)
+    _lint_env_assumptions(task, where, errors, warnings, check_url_prefixes)
 
 
 def main() -> int:
@@ -803,6 +814,12 @@ def main() -> int:
     parser.add_argument('--root')
     parser.add_argument('--no-verify-source', action='store_true')
     parser.add_argument('--strict', action='store_true', help='treat warnings as errors')
+    parser.add_argument(
+        '--check-url-prefix',
+        action='append',
+        default=[],
+        help='trusted http(s) prefix for remote read-only state checks; repeatable',
+    )
     args = parser.parse_args()
 
     path = Path(args.eval_set)
@@ -839,7 +856,7 @@ def main() -> int:
         except json.JSONDecodeError as exc:
             errors.append(f'line {index}: invalid JSON: {exc}')
             continue
-        validate_task(task, index, errors, warnings, scan_text)
+        validate_task(task, index, errors, warnings, scan_text, args.check_url_prefix)
         if not isinstance(task, dict):
             continue
         tid = task.get('id')

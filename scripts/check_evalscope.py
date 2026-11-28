@@ -22,14 +22,17 @@ from _common import assert_under_root, is_allowed_http, is_sensitive_path, probe
 
 def preflight_checks(
     tasks: Any,
-    project_root: str | Path,
+    project_root: str | Path | None,
     source_root: str | Path | None = None,
+    check_url_prefixes: tuple[str, ...] = (),
 ) -> list[str]:
-    """Resolve check paths and URLs against the project root without running them."""
-    root = Path(project_root)
-    if not root.is_dir():
-        raise ValueError(f'project root is not a directory: {root}')
-    root = root.resolve()
+    """Resolve check paths and URLs without running them."""
+    root = None
+    if project_root is not None:
+        root = Path(project_root)
+        if not root.is_dir():
+            raise ValueError(f'project root is not a directory: {root}')
+        root = root.resolve()
     sources = Path(source_root).resolve() if source_root is not None else None
     if sources is not None and not sources.is_dir():
         raise ValueError(f'source root is not a directory: {sources}')
@@ -46,6 +49,8 @@ def preflight_checks(
         for check in getattr(task, 'checks', []):
             ctype = getattr(check, 'type', '')
             check_id = getattr(check, 'id', '?')
+            if ctype in {'file_exists', 'file_content', 'json_path', 'sqlite'} and root is None:
+                raise ValueError(f'{task_id}/{check_id}: project_root is required for local checks')
             if ctype in {'file_exists', 'file_content', 'json_path'}:
                 if is_sensitive_path(check.path):
                     raise ValueError(f'{task_id}/{check_id}: sensitive path denied: {check.path}')
@@ -59,8 +64,11 @@ def preflight_checks(
                 if not (root / check.dsn).is_file():
                     warnings.append(f'{task_id}/{check_id}: sqlite file not present yet: {check.dsn}')
             elif ctype in {'http', 'http_json'}:
-                if not is_allowed_http(check.url):
-                    raise ValueError(f'{task_id}/{check_id}: URL must use http://127.0.0.1 or http://localhost')
+                if not is_allowed_http(check.url, check_url_prefixes):
+                    raise ValueError(
+                        f'{task_id}/{check_id}: URL must use loopback HTTP or an explicit '
+                        f'--check-url-prefix'
+                    )
         exec_spec = getattr(task, 'exec', None)
         reset_url = getattr(exec_spec, 'reset_url', '') if exec_spec is not None else ''
         if reset_url and not is_allowed_http(reset_url):
@@ -92,9 +100,15 @@ def _default_client_factory(exec_spec: Any, base_url: str, model: str, api_key: 
     return build_client(exec_spec, base_url=base_url, model=model, api_key=api_key)
 
 
-def _default_check_runner(task: Any, project_root: Path) -> list[Any]:
+def _default_check_runner(
+    task: Any,
+    project_root: Path,
+    check_url_prefixes: tuple[str, ...] = (),
+) -> list[Any]:
     from evalscope.project_eval.checks import run_checks
 
+    if check_url_prefixes:
+        return run_checks(task, project_root, check_url_prefixes)
     return run_checks(task, project_root)
 
 
@@ -143,13 +157,14 @@ def _fact_coverage(task: Any, record: dict[str, Any]) -> dict[str, list[str]]:
 def run_dry_run(
     tasks: Any,
     agent_url: str,
-    project_root: str | Path,
+    project_root: str | Path | None,
     *,
     client_factory: Any = None,
     check_runner: Any = None,
     reset: Any = None,
     model: str = '',
     api_key: str = '',
+    check_url_prefixes: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """Execute tasks once against the agent and report check evidence without scoring."""
     client_factory = client_factory or _default_client_factory
@@ -158,7 +173,7 @@ def run_dry_run(
     base_url = agent_url.strip().rstrip('/')
     if not base_url:
         raise ValueError('agent URL is required')
-    root = Path(project_root)
+    root = Path(project_root) if project_root is not None else Path.cwd()
     records: list[dict[str, Any]] = []
     for task in tasks:
         record: dict[str, Any] = {
@@ -186,7 +201,7 @@ def run_dry_run(
             record['steps'] = [getattr(step, 'name', '') for step in getattr(turn, 'steps', []) or []]
             record['conversation'] = list(getattr(turn, 'conversation', []) or [])
             record['facts'] = _fact_coverage(task, record)
-            checks = check_runner(task, root)
+            checks = check_runner(task, root, check_url_prefixes) if check_url_prefixes else check_runner(task, root)
             record['checks'] = [
                 {
                     'id': getattr(check, 'check_id', '?'),
@@ -266,8 +281,17 @@ def _index_warning(evalscope_module: Any) -> str | None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--eval-set', required=True)
-    parser.add_argument('--project-root', required=True, help='root for check paths (runtime state directory)')
+    parser.add_argument(
+        '--project-root',
+        help='root for local check paths; optional when every check is remote HTTP',
+    )
     parser.add_argument('--source-root', help='root for materials/source files when it differs from --project-root')
+    parser.add_argument(
+        '--check-url-prefix',
+        action='append',
+        default=[],
+        help='trusted http(s) prefix for remote read-only state checks; repeatable',
+    )
     parser.add_argument(
         '--run', action='store_true', help='execute selected tasks and print evidence (dry-run; no score)'
     )
@@ -284,7 +308,7 @@ def main() -> int:
     if not path.is_file():
         print(f'error: eval set not found: {path}')
         return 1
-    project_root = Path(args.project_root).resolve()
+    project_root = Path(args.project_root).resolve() if args.project_root else None
     source_root = Path(args.source_root).resolve() if args.source_root else None
 
     try:
@@ -327,7 +351,7 @@ def main() -> int:
         return 1
 
     try:
-        warnings = preflight_checks(tasks, project_root, source_root)
+        warnings = preflight_checks(tasks, project_root, source_root, args.check_url_prefix)
     except Exception as exc:  # noqa: BLE001 - path/URL diagnostics
         print(f'error: project_root/check preflight failed: {exc}')
         return 1
@@ -345,7 +369,8 @@ def main() -> int:
         dataset_args={
             'project_eval': {
                 'local_path': str(path),
-                'project_root': str(project_root),
+                **({'project_root': str(project_root)} if project_root is not None else {}),
+                **({'check_url_prefixes': list(args.check_url_prefix)} if args.check_url_prefix else {}),
             }
         },
         eval_batch_size=1,
@@ -376,7 +401,7 @@ def main() -> int:
 
     print(
         f'OK: EvalScope project_eval loaded {len(tasks)} task(s) in subset(s) {subsets} '
-        f'from project_root={project_root}'
+        f'from project_root={project_root or "(remote-only checks)"}'
     )
     if not args.run:
         return 0
@@ -404,6 +429,7 @@ def main() -> int:
         project_root,
         model=args.model or os.environ.get('EVAL_AGENT_MODEL', 'business-agent'),
         api_key=args.api_key or os.environ.get('EVAL_AGENT_API_KEY', 'EMPTY'),
+        check_url_prefixes=tuple(args.check_url_prefix),
     )
     return 0 if print_dry_run(records) else 1
 

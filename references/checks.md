@@ -18,10 +18,14 @@ after the agent call and are read-only.
 point to sensitive files (`.env`, `.ssh`, key files, `secrets*`) or symlinks;
 EvalScope denies those at runtime.
 `expect` is required for `json_path`, `sqlite` and `http_json`; missing it would
-compare the observed value against `null`. HTTP URLs must use
-`http://127.0.0.1[:port]` or `http://localhost[:port]`; uppercase schemes,
+compare the observed value against `null`. HTTP check URLs use loopback
+`http://127.0.0.1[:port]` or `http://localhost[:port]` by default. A separated
+read-only state API can be trusted explicitly with
+`--check-url-prefix https://state.example` (repeatable) and the matching
+`dataset_args.project_eval.check_url_prefixes` in EvalScope. Uppercase schemes,
 userinfo, IPv6 loopback and lookalike hosts such as `localhost.example.com` are
-rejected. Command/exit-code checks are not supported by this skill.
+rejected; reset URLs stay loopback-only. Command/exit-code checks are not
+supported by this skill.
 
 ## Read-only state API contract
 
@@ -58,6 +62,14 @@ Use `http_json` against this endpoint, e.g.:
  "json_path": "audit.0.confirmed", "expect": true}
 ```
 
+For a separately deployed API, pass the trusted prefix explicitly and record
+the same prefix in `metadata.env_assumptions`:
+
+```bash
+python scripts/validate_eval_set.py ... --check-url-prefix https://state.example
+python scripts/check_evalscope.py ... --check-url-prefix https://state.example
+```
+
 ## Assertion rules
 
 The validator rejects checks that cannot distinguish a correct run from an
@@ -85,8 +97,9 @@ incorrect one:
 
 ## Environment assumptions
 
-When a task calls a loopback URL (`reset_url`, `http` or `http_json` checks),
-declare `metadata.env_assumptions` on the task, for example:
+When a task calls a loopback or trusted remote state URL (`reset_url`, `http` or
+`http_json` checks), declare `metadata.env_assumptions` on the task, for
+example:
 
 ```json
 "env_assumptions": {

@@ -114,6 +114,22 @@ class PreflightChecksTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             preflight_checks([task], self.root)
 
+    def test_remote_only_check_does_not_need_project_root(self):
+        task = make_task([make_check(type='http_json', url='https://state.example/v1/state')])
+        self.assertEqual(
+            preflight_checks([task], None, check_url_prefixes=('https://state.example',)),
+            [],
+        )
+
+    def test_remote_check_without_prefix_fails(self):
+        task = make_task([make_check(type='http_json', url='https://state.example/v1/state')])
+        with self.assertRaises(ValueError):
+            preflight_checks([task], None)
+
+    def test_local_check_without_project_root_fails(self):
+        with self.assertRaises(ValueError):
+            preflight_checks([make_task([make_check()])], None)
+
 
 def make_agent_task(task_id='t1', reset_url='', exec_type='agent_api',
                     expected_facts=None, forbidden_facts=None):
@@ -181,6 +197,24 @@ class DryRunTest(unittest.TestCase):
         self.assertTrue(records[0]['checks'][0]['ok'])
         self.assertEqual(client.session_id, 't1')
         self.assertIsNone(records[0]['error'])
+
+    def test_remote_prefixes_are_passed_to_the_check_runner(self):
+        seen = []
+
+        def check_runner(task, root, prefixes):
+            seen.append(prefixes)
+            return [make_check_result()]
+
+        records = run_dry_run(
+            [make_agent_task()],
+            'http://127.0.0.1:9201',
+            None,
+            client_factory=lambda *args, **kwargs: FakeClient(),
+            check_runner=check_runner,
+            check_url_prefixes=('https://state.example',),
+        )
+        self.assertEqual(seen, [('https://state.example',)])
+        self.assertTrue(records[0]['checks'][0]['ok'])
 
     def test_reset_runs_before_chat(self):
         client = FakeClient()

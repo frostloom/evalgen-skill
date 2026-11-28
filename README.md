@@ -70,8 +70,9 @@ python scripts/validate_eval_set.py \
   --scan artifacts/scan.json --plan artifacts/my-agent-plan/eval_plan.json \
   --root /path/to/project --strict
 
-# Authoritative EvalScope check: schema, project_root, checks and adapter.
-# Requires an EvalScope build with evalscope.project_eval.
+# Authoritative EvalScope check: schema, checks and adapter.
+# --project-root is required only for file/JSON/SQLite checks.
+# Add --check-url-prefix https://state.example for remote state checks.
 python scripts/check_evalscope.py \
   --eval-set artifacts/my-agent-plan/eval_set.v1.jsonl \
   --project-root /path/to/runtime-state \
@@ -87,6 +88,7 @@ python scripts/check_evalscope.py \
   --run --agent-url http://127.0.0.1:8080 \
   --task <read-task-id> --task <write-task-id> \
   --task <cancel-task-id> --task <rejection-task-id>
+#    Add --check-url-prefix https://state.example if the state API is remote.
 
 # 7. Record source digest and task versions.
 python scripts/build_manifest.py \
@@ -94,7 +96,8 @@ python scripts/build_manifest.py \
   --eval-set artifacts/my-agent-plan/eval_set.v1.jsonl \
   --out artifacts/my-agent-plan/manifest.json
 
-# 8. Import into EvalScope. Omit --verified for an offline run.
+# 8. Optional management-service import (not part of EvalScope core).
+#    Omit --verified for an offline run.
 python scripts/import_to_evalscope.py \
   --eval-set artifacts/my-agent-plan/eval_set.v1.jsonl \
   --eval-set-root artifacts \
@@ -123,9 +126,22 @@ and enables **Run** only after a connection probe succeeds. A dry-run-passed set
 is imported with `--verified` and shows a verified badge. EvalScope owns the
 Agent call, trace, rubric judge, checks and report.
 
-The direct `TaskConfig` route must set
-`dataset_args.project_eval.project_root` to the project root; otherwise relative
-check paths resolve against the current directory and fail silently.
+`import_to_evalscope.py` requires the management API and is not available in the
+core-only `project_eval` build. With core, skip the import and run the JSONL
+directly:
+
+```bash
+evalscope eval \
+  --model business-agent --eval-type mock_llm \
+  --datasets project_eval \
+  --dataset-args '{"project_eval":{"local_path":"/path/eval_set.v1.jsonl","agent_url":"http://127.0.0.1:8080","project_root":"/path/runtime-state"}}' \
+  --judge '{"strategy":"llm","models":[{"model_id":"your-judge","api_url":"https://api.example.com/v1","api_key":"...","eval_type":"openai_api"}]}' \
+  --eval-batch-size 1
+```
+
+`project_root` is required for file/JSON/SQLite checks; remote-only HTTP checks
+do not need it. For a remote state API, add
+`"check_url_prefixes":["https://state.example"]` to the `project_eval` args.
 
 ## Layout
 

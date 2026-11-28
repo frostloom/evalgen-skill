@@ -39,6 +39,12 @@ class IsAllowedHttpTest(unittest.TestCase):
         ):
             self.assertFalse(is_allowed_http(url), url)
 
+    def test_explicit_remote_prefix_is_opt_in(self):
+        prefix = ('https://state.example',)
+        self.assertTrue(is_allowed_http('https://state.example/v1/state', prefix))
+        self.assertFalse(is_allowed_http('https://state.example.evil/v1/state', prefix))
+        self.assertFalse(is_allowed_http('https://state.example/api/../admin', ('https://state.example/api',)))
+
 
 class ProbeAgentTest(unittest.TestCase):
     def test_invalid_port_reports_offline(self):

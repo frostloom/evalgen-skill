@@ -67,11 +67,12 @@ Content-Type: application/json
 ```
 
 ```json
-{"session_id": "task-id", "message": "客户想退 100 元，可以吗？"}
+{"session_id": "task-id", "message": "客户想退 100 元，可以吗？", "system": "你是客服。"}
 ```
 
 `session_id` is the eval task id, so the business side can key its audit/state
-by task.
+by task. A non-empty `system` is forwarded on every request; multi-turn tasks
+send one user message per request.
 
 ## Response
 
@@ -96,8 +97,8 @@ Rules:
 - A step needs `name` or `tool`; `arguments` (object) or `args` (JSON string),
   `result`, `elapsed_ms`/`duration_ms` and `type` are optional.
 - `state` and `usage` are optional.
-- Multi-turn tasks send one request per `user` message; assistant/system
-  messages are not sent to this endpoint.
+- Multi-turn tasks send one request per `user` message; assistant messages are
+  not sent to this endpoint. `system` is forwarded with every request when set.
 
 ## Other protocols
 

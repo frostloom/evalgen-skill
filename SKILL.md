@@ -4,8 +4,9 @@ description: >-
   Generate EvalScope business-agent eval sets from a local project and its
   knowledge base. Read-only scans selected source/docs, produces eval_set.v1.jsonl
   with reference answers, expected/forbidden facts, rubrics and end-state checks,
-  discovers and probes the business agent's HTTP API, imports the set into a
-  running EvalScope service, and hands execution to EvalScope. Trigger on:
+  discovers and probes the business agent's HTTP API, and hands execution to
+  EvalScope (directly with core or through an optional management import).
+  Trigger on:
   generate eval set, create evaluation tasks from a repo, project eval, evalgen,
   import eval set, 生成评测集, 根据源码出题, 知识库出题, 业务 Agent 评测,
   EvalScope 项目评测, 导入评测集. Do NOT trigger for: model training, serving,
@@ -15,9 +16,10 @@ description: >-
 # EvalScope EvalGen
 
 This skill is an **external authoring tool** for EvalScope. It does not modify
-EvalScope. It reads a user-selected local project
-and knowledge base, writes an `eval_set.v1.jsonl`, and EvalScope consumes that
-file through the `project_eval` benchmark.
+EvalScope. It reads a user-selected local project and knowledge base, writes
+an `eval_set.v1.jsonl`, and EvalScope consumes that file through the
+`project_eval` benchmark. Core builds can run the file directly; importing it
+into the Eval Sets management page is optional.
 
 Read only the reference file for the current step; do not preload everything.
 Commands below use `scripts/...` relative to this skill directory; when your
@@ -63,18 +65,22 @@ Ask for these before generating:
   state endpoint or SQLite snapshot when end-state checks need one;
 - **agent start command** — how to start the business agent when the probe
   fails; include the expected health path if it is not `/health`;
-- **EvalScope service and eval-set root** — the running service URL (default
-  `http://127.0.0.1:9010`) and the directory passed to the service as
-  `--eval-set-root`; the generated JSONL must live under that directory for
-  automatic import to work;
+- **EvalScope service and eval-set root** — only for the optional management
+  import: the running service URL (default `http://127.0.0.1:9010`) and the
+  directory passed as `--eval-set-root`. Core users skip this and pass the
+  JSONL through `TaskConfig`/CLI;
 - **state evidence** — a read-only state response, SQLite copy, or a short
   description of seed data (balances, orders, catalog, subscriptions). Use it to
   declare `metadata.env_assumptions` and to design checks that match the real
   environment;
 - **runtime state directory** — the directory holding the business DB/files
-  that the checks read (the same path passed to `check_evalscope.py
+  that local checks read (the same path passed to `check_evalscope.py
   --project-root`); record it as `metadata.env_assumptions.state_dir` and pass
-  it to the import script as `--state-dir`;
+  it to the import script as `--state-dir`. Remote-only HTTP checks do not
+  need it;
+- **trusted remote state prefix** — for a separated state API, the explicit
+  `--check-url-prefix` value used by the skill and the matching
+  `dataset_args.project_eval.check_url_prefixes` value used by EvalScope;
 - **trace level** — L0/L1/L2 if known; otherwise `auto`.
 
 ## Workflow
@@ -291,12 +297,13 @@ Generation rules (the validator enforces them):
   imperative request that carries the needed parameters; a question such as
   "退 50 元可以吗？" does not reliably create a pending operation for the
   confirmation to act on.
-- When a task uses a loopback URL (reset or state checks), declare
+- When a task uses a loopback or trusted remote state URL, declare
   `metadata.env_assumptions` with the agent URL and the state/seed assumptions.
-- Every task declares `metadata.env_assumptions.agent_url` and
-  `metadata.env_assumptions.state_dir`; the import script reads them to prefill
-  the Eval Sets page, and a set without them is incomplete. When an adapter is
-  used, `agent_url` is the **adapter's** URL — that is what EvalScope calls.
+- Every task declares `metadata.env_assumptions.agent_url`; `state_dir` is
+  required when file/JSON/SQLite checks are present, not for remote-only HTTP
+  checks. The import script reads them to prefill the Eval Sets page. When an
+  adapter is used, `agent_url` is the **adapter's** URL — that is what
+  EvalScope calls.
 - When checks read SQLite or files, set `metadata.env_assumptions.state_dir` to
   the runtime state directory; the import page uses it to prefill the state
   path used by end-state checks.
@@ -323,6 +330,8 @@ python scripts/check_evalscope.py \
   --eval-set <run-dir>/eval_set.v1.jsonl \
   --project-root <runtime state directory> \
   --source-root <project-root>
+# Use --check-url-prefix <prefix> for remote HTTP state checks; --project-root
+# is optional when every check is remote.
 ```
 
 `--project-root` is the runtime state directory that holds the state DB or
@@ -360,6 +369,8 @@ python scripts/check_evalscope.py \
   --run --agent-url <agent URL> \
   --task <read-task-id> --task <write-task-id> \
   --task <cancel-task-id> --task <rejection-task-id>
+# Add --check-url-prefix <prefix> for a remote state API; omit --project-root
+# when every check is remote.
 ```
 
 The dry-run executes the Agent, prints the reply, tool steps, conversation and
@@ -408,7 +419,12 @@ The manifest records source digest, material hashes, task versions and the
 generation timestamp. Editing a task increments its `version`; keep prior run
 files unchanged.
 
-### 9. Import into EvalScope
+### 9. Import into a management-enabled EvalScope (optional)
+
+This step requires the management API; the core `project_eval` build has no
+Eval Sets import endpoint. With core, skip it and run the JSONL directly with
+`TaskConfig`/`eval` (`local_path`, `agent_url`, and `project_root` for local
+checks; `check_url_prefixes` for remote state APIs).
 
 The service must be running with the same root:
 
@@ -438,9 +454,10 @@ python scripts/import_to_evalscope.py \
 `--agent-url` and `--state-dir` are stored on the imported entry so the Eval
 Sets page prefills the business Agent URL and runtime state directory; the user
 only edits them when the environment changes. Both are also read from
-`metadata.env_assumptions` (`agent_url`, `state_dir`) when the flags are
-omitted, so **every task must declare them** — a set that omits them forces the
-user to retype two paths and is rejected as incomplete.
+`metadata.env_assumptions` when the flags are omitted. `agent_url` is required;
+`state_dir` is required for file/JSON/SQLite checks, while remote-only HTTP
+checks may omit it. Pass `--state-dir` when the management service still needs
+a state root for the entry.
 
 Before importing, the script asks the service for its allowed state roots
 (`GET /api/v1/project-eval/state-roots`) and fails with the exact `--state-root`
@@ -453,11 +470,11 @@ run button only after a connection probe succeeds. The script never starts a
 run. If the service is not running, it prints the exact start command and
 leaves the file in place.
 
-The direct `TaskConfig` route must also set
-`dataset_args.project_eval.project_root` to the project root; otherwise relative
-check paths resolve against the current directory and fail silently. The
-evaluator owns execution, trace, judge and report; this skill only authored the
-set.
+The direct `TaskConfig` route must set
+`dataset_args.project_eval.project_root` when the task has file/JSON/SQLite
+checks; remote-only HTTP checks do not need it. For a remote state API, also
+set `dataset_args.project_eval.check_url_prefixes`. The evaluator owns
+execution, trace, judge and report; this skill only authored the set.
 
 ## Safety invariants
 
@@ -527,8 +544,9 @@ set.
   refuse, preview, confirm, report status) and forbid contradictions or
   fabricated amounts/state; they do not require literal equality with the
   reference answer and allow non-contradictory extras.
-- Every loopback URL in `exec` or checks is declared in
-  `metadata.env_assumptions` together with the state/seed assumptions it needs.
+- Every loopback or explicitly trusted remote URL in `exec` or checks is
+  declared in `metadata.env_assumptions` together with the state/seed
+  assumptions it needs.
 - The dry-run covers one task per interaction shape and its evidence has been
   reviewed before handoff, including the fact-coverage report — a task whose
   `expected_facts` the Agent never says will fail a correct answer at judge time.

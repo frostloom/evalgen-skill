@@ -893,15 +893,57 @@ class LintRulesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn('does not exist or is not a directory', result.stdout)
 
-    def test_non_loopback_agent_url_is_an_error(self):
+    def test_remote_agent_url_is_allowed(self):
         task = base_task()
         task['metadata']['env_assumptions'] = {
             'agent_url': 'http://10.0.0.5:9201',
             'state_dir': STATE_DIR,
         }
         result = self.run_validator([task])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_invalid_agent_url_is_an_error(self):
+        task = base_task()
+        task['metadata']['env_assumptions'] = {
+            'agent_url': 'ftp://10.0.0.5:9201',
+            'state_dir': STATE_DIR,
+        }
+        result = self.run_validator([task])
         self.assertEqual(result.returncode, 1)
-        self.assertIn('agent_url must use', result.stdout)
+        self.assertIn('agent_url must be an http(s) URL', result.stdout)
+
+    def test_remote_state_check_needs_explicit_prefix(self):
+        task = base_task(checks=[{
+            'id': 'state-1',
+            'type': 'http_json',
+            'url': 'https://state.example/v1/state',
+            'json_path': 'ok',
+            'expect': True,
+        }])
+        rejected = self.run_validator([task])
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn('--check-url-prefix', rejected.stdout)
+
+        accepted = self.run_validator(
+            [task],
+            ['--check-url-prefix', 'https://state.example'],
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+
+    def test_remote_only_task_needs_no_state_dir(self):
+        task = base_task(checks=[{
+            'id': 'state-1',
+            'type': 'http_json',
+            'url': 'https://state.example/v1/state',
+            'json_path': 'ok',
+            'expect': True,
+        }])
+        task['metadata']['env_assumptions'] = {'agent_url': 'http://127.0.0.1:9201'}
+        result = self.run_validator(
+            [task],
+            ['--check-url-prefix', 'https://state.example'],
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_env_assumptions_must_be_object(self):
         task = base_task()

@@ -67,7 +67,7 @@ EvalScope's `project_eval` benchmark.
 | `id` | Unique string; used as session id by the adapter |
 | `version` | Integer >= 1; increment on edit |
 | `question` | Required non-empty string; `messages` are an optional multi-turn supplement |
-| `messages` | Optional multi-turn messages; when present they are sent instead of question/system |
+| `messages` | Optional multi-turn messages; when present they replace the single-turn question; `system` is still forwarded |
 | `reference_answer` | Gold business outcome; shown as Expected Answer and used by the judge |
 | `expected_facts` / `forbidden_facts` | User-visible facts only; no tool names, code identifiers or source refs; every expected fact must appear in `reference_answer` |
 | `pass_threshold` | 0–1; default 0.6, use 0.75 for multi-criteria tasks |
