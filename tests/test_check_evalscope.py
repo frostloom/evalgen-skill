@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 
 from check_evalscope import (  # noqa: E402
+    _default_check_runner,
     preflight_checks,
     print_dry_run,
     run_dry_run,
@@ -170,6 +171,31 @@ class FakeClient:
         if self.error:
             raise self.error
         return self.turn
+
+
+class DefaultCheckRunnerTest(unittest.TestCase):
+    def test_loopback_and_remote_prefixes_are_combined(self):
+        import types
+        from unittest.mock import patch
+
+        checks_module = types.ModuleType('evalscope.project_eval.checks')
+        checks_module.DEFAULT_HTTP_PREFIXES = ('http://127.0.0.1', 'http://localhost')
+        checks_module.run_checks = lambda task, root, prefixes: list(prefixes)
+        parent = types.ModuleType('evalscope')
+        package = types.ModuleType('evalscope.project_eval')
+        with patch.dict(
+            sys.modules,
+            {
+                'evalscope': parent,
+                'evalscope.project_eval': package,
+                'evalscope.project_eval.checks': checks_module,
+            },
+        ):
+            prefixes = _default_check_runner(object(), Path('.'), ('https://state.example',))
+        self.assertEqual(
+            prefixes,
+            ['http://127.0.0.1', 'http://localhost', 'https://state.example'],
+        )
 
 
 class DryRunTest(unittest.TestCase):

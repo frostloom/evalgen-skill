@@ -105,10 +105,10 @@ def _default_check_runner(
     project_root: Path,
     check_url_prefixes: tuple[str, ...] = (),
 ) -> list[Any]:
-    from evalscope.project_eval.checks import run_checks
+    from evalscope.project_eval.checks import DEFAULT_HTTP_PREFIXES, run_checks
 
     if check_url_prefixes:
-        return run_checks(task, project_root, check_url_prefixes)
+        return run_checks(task, project_root, (*DEFAULT_HTTP_PREFIXES, *check_url_prefixes))
     return run_checks(task, project_root)
 
 

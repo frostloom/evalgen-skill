@@ -69,6 +69,7 @@ python scripts/validate_eval_set.py \
   --eval-set artifacts/my-agent-plan/eval_set.v1.jsonl \
   --scan artifacts/scan.json --plan artifacts/my-agent-plan/eval_plan.json \
   --root /path/to/project --strict
+# Add --check-url-prefix https://state.example for remote state checks.
 
 # Authoritative EvalScope check: schema, checks and adapter.
 # --project-root is required only for file/JSON/SQLite checks.

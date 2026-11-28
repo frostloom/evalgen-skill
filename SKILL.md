@@ -325,6 +325,7 @@ python scripts/validate_eval_set.py \
   --plan <run-dir>/eval_plan.json \
   --root <project-root> \
   --strict
+# Add --check-url-prefix <prefix> for remote state checks.
 
 python scripts/check_evalscope.py \
   --eval-set <run-dir>/eval_set.v1.jsonl \
